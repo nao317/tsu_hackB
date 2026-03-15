@@ -7,6 +7,7 @@ import (
 	"github.com/nao317/tsu_hack/backend/internal/config"
 	"github.com/nao317/tsu_hack/backend/internal/db"
 	"github.com/nao317/tsu_hack/backend/internal/handler"
+	"github.com/nao317/tsu_hack/backend/internal/middleware"
 	"github.com/nao317/tsu_hack/backend/internal/router"
 	"github.com/nao317/tsu_hack/backend/internal/service"
 	"github.com/nao317/tsu_hack/backend/internal/storage"
@@ -29,10 +30,11 @@ func main() {
 	)
 
 	// サービス
-	authSvc     := service.NewAuthService(database)
+	authSvc     := service.NewAuthService(database, cfg.JWTSecret, cfg.JWTAccessExpireMin, cfg.JWTRefreshExpireDays)
 	locationSvc := service.NewLocationService(database)
 	cardSvc     := service.NewCardService(database, imageStorage)
 	aiSvc       := service.NewAIService(cfg.GeminiAPIKey)
+	authMW      := middleware.NewAuthMiddleware(middleware.AuthConfig{SecretKey: []byte(cfg.JWTSecret)})
 
 	// ハンドラ
 	handlers := &router.Handlers{
@@ -52,7 +54,7 @@ func main() {
 		c.JSON(200, gin.H{"status": "ok"})
 	})
 
-	router.Setup(r, handlers, cfg.CORSAllowedOrigins)
+	router.Setup(r, handlers, cfg.CORSAllowedOrigins, authMW)
 
 	log.Printf("サーバー起動: :%s", cfg.Port)
 	if err := r.Run(":" + cfg.Port); err != nil {

@@ -5,6 +5,7 @@ import (
 	"net/http"
 
 	"github.com/gin-gonic/gin"
+	"github.com/nao317/tsu_hack/backend/internal/middleware"
 	"github.com/nao317/tsu_hack/backend/internal/model"
 	"github.com/nao317/tsu_hack/backend/internal/service"
 )
@@ -56,11 +57,50 @@ func (h *AuthHandler) Login(c *gin.Context) {
 }
 
 func (h *AuthHandler) Me(c *gin.Context) {
-	userID := c.GetString("user_id")
+	userID := c.GetString(middleware.ContextUserIDKey)
+	if userID == "" {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "認証情報がありません", "code": "UNAUTHORIZED"})
+		return
+	}
+
 	me, err := h.svc.GetMe(c.Request.Context(), userID)
 	if err != nil {
 		c.JSON(http.StatusNotFound, gin.H{"error": err.Error(), "code": "NOT_FOUND"})
 		return
 	}
 	c.JSON(http.StatusOK, me)
+}
+
+func (h *AuthHandler) Refresh(c *gin.Context) {
+	var req model.RefreshRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error(), "code": "VALIDATION_ERROR"})
+		return
+	}
+
+	resp, err := h.svc.Refresh(c.Request.Context(), req.RefreshToken)
+	if errors.Is(err, service.ErrInvalidToken) {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": err.Error(), "code": "INVALID_TOKEN"})
+		return
+	}
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "サーバーエラー", "code": "INTERNAL_ERROR"})
+		return
+	}
+
+	c.JSON(http.StatusOK, resp)
+}
+
+func (h *AuthHandler) Logout(c *gin.Context) {
+	var req model.LogoutRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error(), "code": "VALIDATION_ERROR"})
+		return
+	}
+
+	if err := h.svc.Logout(c.Request.Context(), req.RefreshToken); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "サーバーエラー", "code": "INTERNAL_ERROR"})
+		return
+	}
+	c.Status(http.StatusNoContent)
 }

@@ -14,7 +14,7 @@ type Handlers struct {
 	AI           *handler.AIHandler
 }
 
-func Setup(r *gin.Engine, h *Handlers, allowedOrigins string) {
+func Setup(r *gin.Engine, h *Handlers, allowedOrigins string, authMW *middleware.AuthMiddleware) {
 	r.Use(middleware.CORS(allowedOrigins))
 
 	v1 := r.Group("/api/v1")
@@ -23,8 +23,13 @@ func Setup(r *gin.Engine, h *Handlers, allowedOrigins string) {
 	auth := v1.Group("/auth")
 	{
 		auth.POST("/signup", h.Auth.Signup)
-		auth.POST("/login",  h.Auth.Login)
-		auth.GET("/me",      h.Auth.Me)
+		auth.POST("/login", h.Auth.Login)
+		auth.POST("/refresh", h.Auth.Refresh)
+
+		authPrivate := auth.Group("")
+		authPrivate.Use(authMW.RequireAuth())
+		authPrivate.GET("/me", h.Auth.Me)
+		authPrivate.POST("/logout", h.Auth.Logout)
 	}
 
 	// ゲスト可
@@ -34,14 +39,15 @@ func Setup(r *gin.Engine, h *Handlers, allowedOrigins string) {
 	v1.GET("/cards/daily",         h.Card.Daily)
 	v1.POST("/ai/recommend",       h.AI.Recommend)
 
-	// TODO: JWT実装後に認証ミドルウェアを追加する
-	v1.GET("/user/locations",                           h.UserLocation.List)
-	v1.POST("/user/locations",                          h.UserLocation.Create)
-	v1.PUT("/user/locations/:id",                       h.UserLocation.Update)
-	v1.DELETE("/user/locations/:id",                    h.UserLocation.Delete)
-	v1.GET("/user/locations/:id/cards",                 h.UserLocation.GetCards)
-	v1.POST("/user/cards",                              h.Card.Create)
-	v1.POST("/user/locations/:id/cards",                h.Card.AddToLocation)
-	v1.DELETE("/user/locations/:id/cards/:card_id",     h.Card.RemoveFromLocation)
-	v1.PUT("/user/locations/:id/cards/reorder",         h.Card.Reorder)
+	protected := v1.Group("")
+	protected.Use(authMW.RequireAuth())
+	protected.GET("/user/locations", h.UserLocation.List)
+	protected.POST("/user/locations", h.UserLocation.Create)
+	protected.PUT("/user/locations/:id", h.UserLocation.Update)
+	protected.DELETE("/user/locations/:id", h.UserLocation.Delete)
+	protected.GET("/user/locations/:id/cards", h.UserLocation.GetCards)
+	protected.POST("/user/cards", h.Card.Create)
+	protected.POST("/user/locations/:id/cards", h.Card.AddToLocation)
+	protected.DELETE("/user/locations/:id/cards/:card_id", h.Card.RemoveFromLocation)
+	protected.PUT("/user/locations/:id/cards/reorder", h.Card.Reorder)
 }
