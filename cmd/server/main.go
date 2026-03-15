@@ -50,6 +50,9 @@ func main() {
 	}
 
 	r := gin.Default()
+	if err := r.SetTrustedProxies(nil); err != nil {
+		log.Fatalf("プロキシ設定失敗: %v", err)
+	}
 	r.GET("/health", func(c *gin.Context) {
 		c.JSON(200, gin.H{"status": "ok"})
 	})
