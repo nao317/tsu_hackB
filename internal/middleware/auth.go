@@ -4,7 +4,6 @@ import (
 	"errors"
 	"net/http"
 	"strings"
-	"time"
 
 	"github.com/gin-gonic/gin"
 	"github.com/golang-jwt/jwt/v5"
@@ -30,7 +29,7 @@ type AuthMiddleware struct {
 }
 
 type CustomClaims struct {
-	UserID string `json:"user_id"`
+	TokenType string `json:"type"`
 	jwt.RegisteredClaims
 }
 
@@ -41,30 +40,9 @@ func NewAuthMiddleware(cfg AuthConfig) *AuthMiddleware {
 	if cfg.TokenParam == "" {
 		cfg.TokenParam = "token"
 	}
-	if cfg.TTLMinutes <= 0 {
-		cfg.TTLMinutes = 60
-	}
-
 	return &AuthMiddleware{
 		config: cfg,
 	}
-}
-
-func (a *AuthMiddleware) GenerateToken(userID string) (string, error) {
-	now := time.Now()
-
-	claims := CustomClaims{
-		UserID: userID,
-		RegisteredClaims: jwt.RegisteredClaims{
-			Issuer:    a.config.Issuer,
-			Subject:   userID,
-			IssuedAt:  jwt.NewNumericDate(now),
-			ExpiresAt: jwt.NewNumericDate(now.Add(time.Duration(a.config.TTLMinutes) * time.Minute)),
-		},
-	}
-
-	token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
-	return token.SignedString(a.config.SecretKey)
 }
 
 func (a *AuthMiddleware) RequireAuth() gin.HandlerFunc {
@@ -77,7 +55,7 @@ func (a *AuthMiddleware) RequireAuth() gin.HandlerFunc {
 		tokenString, err := a.extractToken(c)
 		if err != nil {
 			c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{
-				"error": "missing or invalid token",
+				"error": "トークンが不正です",
 			})
 			return
 		}
@@ -90,14 +68,14 @@ func (a *AuthMiddleware) RequireAuth() gin.HandlerFunc {
 			}
 			return a.config.SecretKey, nil
 		})
-		if err != nil || !token.Valid {
+		if err != nil || !token.Valid || claims.TokenType != "access" || claims.Subject == "" {
 			c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{
-				"error": "unauthorized",
+				"error": "認証に失敗しました",
 			})
 			return
 		}
 
-		c.Set(ContextUserIDKey, claims.UserID)
+		c.Set(ContextUserIDKey, claims.Subject)
 		c.Set(ContextClaimsKey, claims)
 		c.Next()
 	}

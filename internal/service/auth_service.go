@@ -25,6 +25,17 @@ type AuthService struct {
     refreshExpireDays    int
 }
 
+type tokenClaims struct {
+    TokenType string `json:"type"`
+    jwt.RegisteredClaims
+}
+
+type signedTokens struct {
+    accessToken  string
+    refreshToken string
+    refreshExp   time.Time
+}
+
 func NewAuthService(db *sql.DB, jwtSecret string, accessExpireMin, refreshExpireDays int) *AuthService {
     return &AuthService{
         db:                db,
@@ -91,57 +102,40 @@ func (s *AuthService) Login(ctx context.Context, req *model.LoginRequest) (*mode
 // issueTokens はアクセストークンとリフレッシュトークンを発行する。
 // リフレッシュトークンはDBに保存する。
 func (s *AuthService) issueTokens(ctx context.Context, userID string) (*model.AuthResponse, error) {
-    now := time.Now()
-    accessExp := now.Add(time.Duration(s.accessExpireMin) * time.Minute)
-
-    // アクセストークン
-    accessClaims := jwt.MapClaims{
-        "sub": userID,
-        "exp": accessExp.Unix(),
-        "iat": now.Unix(),
-        "type": "access",
-    }
-    accessToken, err := jwt.NewWithClaims(jwt.SigningMethodHS256, accessClaims).SignedString(s.jwtSecret)
+    tokens, err := s.generateSignedTokens(userID)
     if err != nil {
-        return nil, fmt.Errorf("sign access token: %w", err)
-    }
-
-    // リフレッシュトークン（有効期限は長め）
-    refreshExp := now.Add(time.Duration(s.refreshExpireDays) * 24 * time.Hour)
-    refreshClaims := jwt.MapClaims{
-        "sub":  userID,
-        "exp":  refreshExp.Unix(),
-        "iat":  now.Unix(),
-        "type": "refresh",
-    }
-    refreshToken, err := jwt.NewWithClaims(jwt.SigningMethodHS256, refreshClaims).SignedString(s.jwtSecret)
-    if err != nil {
-        return nil, fmt.Errorf("sign refresh token: %w", err)
+        return nil, err
     }
 
     // リフレッシュトークンをDBに保存（ログアウト時に削除して無効化できるようにする）
     _, err = s.db.ExecContext(ctx,
         `INSERT INTO refresh_tokens (token, user_id, expires_at) VALUES (?, ?, ?)
          ON DUPLICATE KEY UPDATE expires_at = VALUES(expires_at)`,
-        refreshToken, userID, refreshExp,
+        tokens.refreshToken, userID, tokens.refreshExp,
     )
     if err != nil {
         return nil, fmt.Errorf("save refresh token: %w", err)
     }
 
     return &model.AuthResponse{
-        AccessToken:  accessToken,
-        RefreshToken: refreshToken,
+        AccessToken:  tokens.accessToken,
+        RefreshToken: tokens.refreshToken,
         TokenType:    "bearer",
         ExpiresIn:    s.accessExpireMin * 60,
     }, nil
 }
 
 func (s *AuthService) Refresh(ctx context.Context, refreshToken string) (*model.AuthResponse, error) {
-    // DBにリフレッシュトークンが存在するか確認
+    tx, err := s.db.BeginTx(ctx, nil)
+    if err != nil {
+        return nil, fmt.Errorf("begin refresh tx: %w", err)
+    }
+    defer tx.Rollback()
+
+    // DBにリフレッシュトークンが存在するか確認し、同時更新を防ぐためロックする
     var userID string
-    err := s.db.QueryRowContext(ctx,
-        "SELECT user_id FROM refresh_tokens WHERE token = ? AND expires_at > NOW()", refreshToken,
+    err = tx.QueryRowContext(ctx,
+        "SELECT user_id FROM refresh_tokens WHERE token = ? AND expires_at > NOW() FOR UPDATE", refreshToken,
     ).Scan(&userID)
     if err == sql.ErrNoRows {
         return nil, ErrInvalidToken
@@ -151,11 +145,72 @@ func (s *AuthService) Refresh(ctx context.Context, refreshToken string) (*model.
     }
 
     // 古いトークンを削除してローテーション
-    if _, err := s.db.ExecContext(ctx, "DELETE FROM refresh_tokens WHERE token = ?", refreshToken); err != nil {
-        return nil, fmt.Errorf("failed to delete old refresh token: %w", err)
+    if _, err := tx.ExecContext(ctx, "DELETE FROM refresh_tokens WHERE token = ?", refreshToken); err != nil {
+        return nil, fmt.Errorf("delete old refresh token: %w", err)
     }
 
-    return s.issueTokens(ctx, userID)
+    tokens, err := s.generateSignedTokens(userID)
+    if err != nil {
+        return nil, err
+    }
+
+    _, err = tx.ExecContext(ctx,
+        `INSERT INTO refresh_tokens (token, user_id, expires_at) VALUES (?, ?, ?)
+         ON DUPLICATE KEY UPDATE expires_at = VALUES(expires_at)`,
+        tokens.refreshToken, userID, tokens.refreshExp,
+    )
+    if err != nil {
+        return nil, fmt.Errorf("save refresh token: %w", err)
+    }
+
+    if err := tx.Commit(); err != nil {
+        return nil, fmt.Errorf("commit refresh tx: %w", err)
+    }
+
+    return &model.AuthResponse{
+        AccessToken:  tokens.accessToken,
+        RefreshToken: tokens.refreshToken,
+        TokenType:    "bearer",
+        ExpiresIn:    s.accessExpireMin * 60,
+    }, nil
+}
+
+func (s *AuthService) generateSignedTokens(userID string) (*signedTokens, error) {
+    now := time.Now()
+    accessExp := now.Add(time.Duration(s.accessExpireMin) * time.Minute)
+
+    accessClaims := tokenClaims{
+        TokenType: "access",
+        RegisteredClaims: jwt.RegisteredClaims{
+            Subject:   userID,
+            IssuedAt:  jwt.NewNumericDate(now),
+            ExpiresAt: jwt.NewNumericDate(accessExp),
+        },
+    }
+    accessToken, err := jwt.NewWithClaims(jwt.SigningMethodHS256, accessClaims).SignedString(s.jwtSecret)
+    if err != nil {
+        return nil, fmt.Errorf("sign access token: %w", err)
+    }
+
+    refreshExp := now.Add(time.Duration(s.refreshExpireDays) * 24 * time.Hour)
+    refreshClaims := tokenClaims{
+        TokenType: "refresh",
+        RegisteredClaims: jwt.RegisteredClaims{
+            Subject:   userID,
+            IssuedAt:  jwt.NewNumericDate(now),
+            ExpiresAt: jwt.NewNumericDate(refreshExp),
+        },
+    }
+    refreshToken, err := jwt.NewWithClaims(jwt.SigningMethodHS256, refreshClaims).SignedString(s.jwtSecret)
+    if err != nil {
+        return nil, fmt.Errorf("sign refresh token: %w", err)
+    }
+
+    return &signedTokens{
+        accessToken:  accessToken,
+        refreshToken: refreshToken,
+        refreshExp:   refreshExp,
+    }, nil
 }
 
 func (s *AuthService) Logout(ctx context.Context, refreshToken string) error {
