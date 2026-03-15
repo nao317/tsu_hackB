@@ -151,7 +151,9 @@ func (s *AuthService) Refresh(ctx context.Context, refreshToken string) (*model.
     }
 
     // 古いトークンを削除してローテーション
-    s.db.ExecContext(ctx, "DELETE FROM refresh_tokens WHERE token = ?", refreshToken)
+    if _, err := s.db.ExecContext(ctx, "DELETE FROM refresh_tokens WHERE token = ?", refreshToken); err != nil {
+        return nil, fmt.Errorf("failed to delete old refresh token: %w", err)
+    }
 
     return s.issueTokens(ctx, userID)
 }
