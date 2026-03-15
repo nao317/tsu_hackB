@@ -59,12 +59,12 @@ func resolveDatabaseURL() string {
 
     dbUser := os.Getenv("DB_USER")
     dbPass := os.Getenv("DB_PASS")
-    dbHost := os.Getenv("DB_HOST")
+    dbHost := getEnv("DB_HOST", "localhost")
     dbName := os.Getenv("DB_NAME")
     dbPort := getEnv("DB_PORT", "3306")
 
-    if dbUser == "" || dbPass == "" || dbHost == "" || dbName == "" {
-        log.Fatal("環境変数 DATABASE_URL または DB_USER/DB_PASS/DB_HOST/DB_NAME が設定されていません")
+    if dbUser == "" || dbPass == "" || dbName == "" {
+        log.Fatal("環境変数 DATABASE_URL または DB_USER/DB_PASS/DB_NAME が設定されていません")
     }
 
     return fmt.Sprintf(
