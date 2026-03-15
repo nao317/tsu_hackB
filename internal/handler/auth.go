@@ -90,7 +90,14 @@ func (h *AuthHandler) Logout(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error(), "code": "VALIDATION_ERROR"})
 		return
 	}
-	h.svc.Logout(c.Request.Context(), req.RefreshToken)
+	if err := h.svc.Logout(c.Request.Context(), req.RefreshToken); err != nil {
+		if errors.Is(err, service.ErrInvalidToken) {
+			c.JSON(http.StatusUnauthorized, gin.H{"error": err.Error(), "code": "INVALID_TOKEN"})
+			return
+		}
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "サーバーエラー", "code": "INTERNAL_ERROR"})
+		return
+	}
 	c.Status(http.StatusNoContent)
 }
 
