@@ -29,7 +29,7 @@ func (h *AuthHandler) Signup(c *gin.Context) {
 	resp, err := h.svc.Signup(c.Request.Context(), &req)
 	
 	// すでにアカウントが存在するときエラーを返す
-	if errors.Is(err, service.ErrEmailAleardyExists) {
+	if errors.Is(err, service.ErrEmailAlreadyExists) {
 		c.JSON(http.StatusConflict, gin.H{"error": err.Error(), "code": "EMAIL_ALREADY_EXISTS"})
 		return
 	}
