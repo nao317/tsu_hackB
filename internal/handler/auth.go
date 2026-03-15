@@ -103,7 +103,7 @@ func (h *AuthHandler) Logout(c *gin.Context) {
 
 func (h *AuthHandler) Me(c *gin.Context) {
 	userID := c.GetString("user_id")
-	me, err := h.svc.GetMe(c.Request.Content(), userID)
+	me, err := h.svc.GetMe(c.Request.Context(), userID)
 	if err != nil {
 		c.JSON(http.StatusNotFound, gin.H{"error": err.Error(), "code": "NOT_FOUND"})
 		return 
