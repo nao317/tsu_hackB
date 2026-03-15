@@ -6,12 +6,15 @@ services:
     ports:
       - "8080:8080"
     environment:
-      - DB_USER=user
-      - DB_PASS=password
-      - DB_NAME=mydb
-      - DB_HOST=db
+      - DATABASE_URL=user:password@tcp(mysql:3306)/mydb?parseTime=true
+      - JWT_SECRET=local-dev-secret-key-32chars-min!!
+      - SUPABASE_URL=${SUPABASE_URL:-http://localhost}
+      - SUPABASE_SERVICE_KEY=${SUPABASE_SERVICE_KEY:-dummy}
+      - GEMINI_API_KEY=${GEMINI_API_KEY:-dummy}
+      - CORS_ALLOWED_ORIGINS=http://localhost:3000
     depends_on:
-      - mysql
+      mysql:
+        condition: service_healthy
   mysql:
     image: mysql:8.0
     environment:
@@ -23,6 +26,11 @@ services:
       - "3306:3306"
     volumes:
       - mysql_data:/var/lib/mysql
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-uuser", "-ppassword"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
 
 volumes:
   mysql_data:
