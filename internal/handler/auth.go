@@ -47,7 +47,7 @@ func (h *AuthHandler) Login(c *gin.Context) {
 	var req model.LoginRequest
 	
 	// バリデーションエラー
-	if err != c.ShouldBindJSON(&req); err != nil {
+	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error(), "code": "VALIDATION_ERROR"})
 		return
 	}
