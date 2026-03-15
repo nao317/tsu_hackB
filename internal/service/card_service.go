@@ -112,6 +112,68 @@ func (s *CardService) CreateCard(ctx context.Context, userID string, req *model.
     return &card, nil
 }
 
+func (s *CardService) AddToLocation(ctx context.Context, locationID, userID string, req *model.AddCardToLocationRequest) error {
+    var ownerID string
+    err := s.db.QueryRowContext(ctx, "SELECT user_id FROM user_locations WHERE id = ?", locationID).Scan(&ownerID)
+    if err == sql.ErrNoRows {
+        return ErrNotFound
+    }
+    if err != nil {
+        return err
+    }
+    if ownerID != userID {
+        return ErrForbidden
+    }
+
+    _, err = s.db.ExecContext(ctx,
+        "INSERT INTO user_location_cards (user_location_id, card_id, sort_order) VALUES (?, ?, ?)",
+        locationID, req.CardID, req.SortOrder,
+    )
+    return err
+}
+
+func (s *CardService) RemoveFromLocation(ctx context.Context, locationID, cardID, userID string) error {
+    var ownerID string
+    err := s.db.QueryRowContext(ctx, "SELECT user_id FROM user_locations WHERE id = ?", locationID).Scan(&ownerID)
+    if err == sql.ErrNoRows {
+        return ErrNotFound
+    }
+    if err != nil {
+        return err
+    }
+    if ownerID != userID {
+        return ErrForbidden
+    }
+
+    _, err = s.db.ExecContext(ctx,
+        "DELETE FROM user_location_cards WHERE user_location_id = ? AND card_id = ?",
+        locationID, cardID,
+    )
+    return err
+}
+
+func (s *CardService) ReorderCards(ctx context.Context, locationID, userID string, req *model.ReorderCardsRequest) error {
+    var ownerID string
+    err := s.db.QueryRowContext(ctx, "SELECT user_id FROM user_locations WHERE id = ?", locationID).Scan(&ownerID)
+    if err == sql.ErrNoRows {
+        return ErrNotFound
+    }
+    if err != nil {
+        return err
+    }
+    if ownerID != userID {
+        return ErrForbidden
+    }
+
+    for _, co := range req.Cards {
+        s.db.ExecContext(ctx,
+            "UPDATE user_location_cards SET sort_order = ? WHERE user_location_id = ? AND card_id = ?",
+            co.SortOrder, locationID, co.CardID,
+        )
+    }
+    return nil
+}
+
 func nullStr(s string) interface{} {
     if s == "" {
         return nil

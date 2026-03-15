@@ -13,7 +13,7 @@ RUN go mod download
 # ソースコードをコピー
 COPY . .
 # ビルド
-RUN CGO_ENABLED=0 GOOS=linux GORCH=amd64 go build -o /app/server .
+RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -o /app/server ./cmd/server
 
 # 実行用のイメージ指定
 FROM gcr.io/distroless/base-debian12

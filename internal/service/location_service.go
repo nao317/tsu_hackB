@@ -3,11 +3,17 @@ package service
 import (
     "context"
     "database/sql"
+    "errors"
     "fmt"
     "math"
     "sort"
 
     "github.com/nao317/tsu_hack/backend/internal/model"
+)
+
+var (
+    ErrNotFound  = errors.New("見つかりません")
+    ErrForbidden = errors.New("権限がありません")
 )
 
 type LocationService struct {
@@ -146,6 +152,133 @@ func (s *LocationService) GetCards(ctx context.Context, locationID string) ([]mo
         JOIN location_cards lc ON lc.card_id = c.id
         WHERE lc.location_id = ?
         ORDER BY lc.sort_order`, locationID,
+    )
+    if err != nil {
+        return nil, err
+    }
+    defer rows.Close()
+    return scanCards(rows)
+}
+
+func (s *LocationService) ListUserLocations(ctx context.Context, userID string) ([]model.UserLocation, error) {
+    rows, err := s.db.QueryContext(ctx,
+        "SELECT id, user_id, name, latitude, longitude, radius_m, created_at, updated_at FROM user_locations WHERE user_id = ?",
+        userID,
+    )
+    if err != nil {
+        return nil, err
+    }
+    defer rows.Close()
+
+    var locs []model.UserLocation
+    for rows.Next() {
+        var l model.UserLocation
+        if err := rows.Scan(&l.ID, &l.UserID, &l.Name, &l.Latitude, &l.Longitude, &l.RadiusM, &l.CreatedAt, &l.UpdatedAt); err != nil {
+            return nil, err
+        }
+        locs = append(locs, l)
+    }
+    return locs, nil
+}
+
+func (s *LocationService) CreateUserLocation(ctx context.Context, userID string, req *model.CreateUserLocationRequest) (*model.UserLocation, error) {
+    var id string
+    s.db.QueryRowContext(ctx, "SELECT UUID()").Scan(&id)
+
+    radiusM := req.RadiusM
+    if radiusM == 0 {
+        radiusM = 200
+    }
+
+    _, err := s.db.ExecContext(ctx,
+        "INSERT INTO user_locations (id, user_id, name, latitude, longitude, radius_m) VALUES (?, ?, ?, ?, ?, ?)",
+        id, userID, req.Name, req.Latitude, req.Longitude, radiusM,
+    )
+    if err != nil {
+        return nil, fmt.Errorf("create user location: %w", err)
+    }
+
+    var loc model.UserLocation
+    s.db.QueryRowContext(ctx,
+        "SELECT id, user_id, name, latitude, longitude, radius_m, created_at, updated_at FROM user_locations WHERE id = ?", id,
+    ).Scan(&loc.ID, &loc.UserID, &loc.Name, &loc.Latitude, &loc.Longitude, &loc.RadiusM, &loc.CreatedAt, &loc.UpdatedAt)
+    return &loc, nil
+}
+
+func (s *LocationService) UpdateUserLocation(ctx context.Context, id, userID string, req *model.UpdateUserLocationRequest) (*model.UserLocation, error) {
+    var ownerID string
+    err := s.db.QueryRowContext(ctx, "SELECT user_id FROM user_locations WHERE id = ?", id).Scan(&ownerID)
+    if err == sql.ErrNoRows {
+        return nil, ErrNotFound
+    }
+    if err != nil {
+        return nil, err
+    }
+    if ownerID != userID {
+        return nil, ErrForbidden
+    }
+
+    _, err = s.db.ExecContext(ctx,
+        `UPDATE user_locations SET
+            name      = IF(? != '', ?, name),
+            latitude  = IF(? != 0, ?, latitude),
+            longitude = IF(? != 0, ?, longitude),
+            radius_m  = IF(? != 0, ?, radius_m),
+            updated_at = NOW()
+         WHERE id = ?`,
+        req.Name, req.Name,
+        req.Latitude, req.Latitude,
+        req.Longitude, req.Longitude,
+        req.RadiusM, req.RadiusM,
+        id,
+    )
+    if err != nil {
+        return nil, fmt.Errorf("update user location: %w", err)
+    }
+
+    var loc model.UserLocation
+    s.db.QueryRowContext(ctx,
+        "SELECT id, user_id, name, latitude, longitude, radius_m, created_at, updated_at FROM user_locations WHERE id = ?", id,
+    ).Scan(&loc.ID, &loc.UserID, &loc.Name, &loc.Latitude, &loc.Longitude, &loc.RadiusM, &loc.CreatedAt, &loc.UpdatedAt)
+    return &loc, nil
+}
+
+func (s *LocationService) DeleteUserLocation(ctx context.Context, id, userID string) error {
+    var ownerID string
+    err := s.db.QueryRowContext(ctx, "SELECT user_id FROM user_locations WHERE id = ?", id).Scan(&ownerID)
+    if err == sql.ErrNoRows {
+        return ErrNotFound
+    }
+    if err != nil {
+        return err
+    }
+    if ownerID != userID {
+        return ErrForbidden
+    }
+
+    _, err = s.db.ExecContext(ctx, "DELETE FROM user_locations WHERE id = ?", id)
+    return err
+}
+
+func (s *LocationService) GetUserLocationCards(ctx context.Context, locationID, userID string) ([]model.Card, error) {
+    var ownerID string
+    err := s.db.QueryRowContext(ctx, "SELECT user_id FROM user_locations WHERE id = ?", locationID).Scan(&ownerID)
+    if err == sql.ErrNoRows {
+        return nil, ErrNotFound
+    }
+    if err != nil {
+        return nil, err
+    }
+    if ownerID != userID {
+        return nil, ErrForbidden
+    }
+
+    rows, err := s.db.QueryContext(ctx, `
+        SELECT c.id, c.label, c.image_url, c.emoji, c.category, c.is_daily, c.created_by, c.created_at
+        FROM cards c
+        JOIN user_location_cards ulc ON ulc.card_id = c.id
+        WHERE ulc.user_location_id = ?
+        ORDER BY ulc.sort_order`, locationID,
     )
     if err != nil {
         return nil, err

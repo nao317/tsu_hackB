@@ -7,6 +7,7 @@ import (
     "os"
     "path/filepath"
     "sort"
+    "strings"
 
     _ "github.com/go-sql-driver/mysql"
     "github.com/joho/godotenv"
@@ -18,6 +19,15 @@ func main() {
     dsn := os.Getenv("DATABASE_URL")
     if dsn == "" {
         log.Fatal("DATABASE_URL が設定されていません")
+    }
+
+    // multiStatements=true で1ファイル複数SQL文を許可
+    if !strings.Contains(dsn, "multiStatements=true") {
+        if strings.Contains(dsn, "?") {
+            dsn += "&multiStatements=true"
+        } else {
+            dsn += "?multiStatements=true"
+        }
     }
 
     db, err := sql.Open("mysql", dsn)
