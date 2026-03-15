@@ -5,7 +5,9 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"time"
 
+	"github.com/golang-jwt/jwt/v5"
 	"github.com/nao317/tsu_hack/backend/internal/model"
 	"golang.org/x/crypto/bcrypt"
 )
@@ -13,14 +15,34 @@ import (
 var (
 	ErrEmailAlreadyExists = errors.New("このメールアドレスは既に使用されています")
 	ErrInvalidCredentials = errors.New("メールアドレスまたはパスワードが正しくありません")
+	ErrInvalidToken       = errors.New("無効なトークンです")
 )
 
 type AuthService struct {
-	db *sql.DB
+	db                *sql.DB
+	jwtSecret         []byte
+	accessExpireMin   int
+	refreshExpireDays int
 }
 
-func NewAuthService(db *sql.DB) *AuthService {
-	return &AuthService{db: db}
+type tokenClaims struct {
+	TokenType string `json:"type"`
+	jwt.RegisteredClaims
+}
+
+type signedTokens struct {
+	accessToken  string
+	refreshToken string
+	refreshExp   time.Time
+}
+
+func NewAuthService(db *sql.DB, jwtSecret string, accessExpireMin, refreshExpireDays int) *AuthService {
+	return &AuthService{
+		db:                db,
+		jwtSecret:         []byte(jwtSecret),
+		accessExpireMin:   accessExpireMin,
+		refreshExpireDays: refreshExpireDays,
+	}
 }
 
 func (s *AuthService) Signup(ctx context.Context, req *model.SignupRequest) (*model.MeResponse, error) {
@@ -54,7 +76,7 @@ func (s *AuthService) Signup(ctx context.Context, req *model.SignupRequest) (*mo
 	return s.GetMe(ctx, userID)
 }
 
-func (s *AuthService) Login(ctx context.Context, req *model.LoginRequest) (*model.MeResponse, error) {
+func (s *AuthService) Login(ctx context.Context, req *model.LoginRequest) (*model.AuthResponse, error) {
 	var user model.User
 	err := s.db.QueryRowContext(ctx,
 		"SELECT id, password_hash FROM users WHERE email = ?", req.Email,
@@ -70,7 +92,121 @@ func (s *AuthService) Login(ctx context.Context, req *model.LoginRequest) (*mode
 		return nil, ErrInvalidCredentials
 	}
 
-	return s.GetMe(ctx, user.ID)
+	return s.issueTokens(ctx, user.ID)
+}
+
+func (s *AuthService) issueTokens(ctx context.Context, userID string) (*model.AuthResponse, error) {
+	tokens, err := s.generateSignedTokens(userID)
+	if err != nil {
+		return nil, err
+	}
+
+	_, err = s.db.ExecContext(ctx,
+		`INSERT INTO refresh_tokens (token, user_id, expires_at) VALUES (?, ?, ?)
+		 ON DUPLICATE KEY UPDATE expires_at = VALUES(expires_at)`,
+		tokens.refreshToken, userID, tokens.refreshExp,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("save refresh token: %w", err)
+	}
+
+	return &model.AuthResponse{
+		AccessToken:  tokens.accessToken,
+		RefreshToken: tokens.refreshToken,
+		TokenType:    "bearer",
+		ExpiresIn:    s.accessExpireMin * 60,
+	}, nil
+}
+
+func (s *AuthService) Refresh(ctx context.Context, refreshToken string) (*model.AuthResponse, error) {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return nil, fmt.Errorf("begin refresh tx: %w", err)
+	}
+	defer tx.Rollback()
+
+	var userID string
+	err = tx.QueryRowContext(ctx,
+		"SELECT user_id FROM refresh_tokens WHERE token = ? AND expires_at > NOW() FOR UPDATE", refreshToken,
+	).Scan(&userID)
+	if err == sql.ErrNoRows {
+		return nil, ErrInvalidToken
+	}
+	if err != nil {
+		return nil, fmt.Errorf("refresh query: %w", err)
+	}
+
+	if _, err := tx.ExecContext(ctx, "DELETE FROM refresh_tokens WHERE token = ?", refreshToken); err != nil {
+		return nil, fmt.Errorf("delete old refresh token: %w", err)
+	}
+
+	tokens, err := s.generateSignedTokens(userID)
+	if err != nil {
+		return nil, err
+	}
+
+	_, err = tx.ExecContext(ctx,
+		`INSERT INTO refresh_tokens (token, user_id, expires_at) VALUES (?, ?, ?)
+		 ON DUPLICATE KEY UPDATE expires_at = VALUES(expires_at)`,
+		tokens.refreshToken, userID, tokens.refreshExp,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("save refresh token: %w", err)
+	}
+
+	if err := tx.Commit(); err != nil {
+		return nil, fmt.Errorf("commit refresh tx: %w", err)
+	}
+
+	return &model.AuthResponse{
+		AccessToken:  tokens.accessToken,
+		RefreshToken: tokens.refreshToken,
+		TokenType:    "bearer",
+		ExpiresIn:    s.accessExpireMin * 60,
+	}, nil
+}
+
+func (s *AuthService) Logout(ctx context.Context, refreshToken string) error {
+	_, err := s.db.ExecContext(ctx, "DELETE FROM refresh_tokens WHERE token = ?", refreshToken)
+	return err
+}
+
+func (s *AuthService) generateSignedTokens(userID string) (*signedTokens, error) {
+	now := time.Now()
+	accessExp := now.Add(time.Duration(s.accessExpireMin) * time.Minute)
+
+	accessClaims := tokenClaims{
+		TokenType: "access",
+		RegisteredClaims: jwt.RegisteredClaims{
+			Subject:   userID,
+			IssuedAt:  jwt.NewNumericDate(now),
+			ExpiresAt: jwt.NewNumericDate(accessExp),
+		},
+	}
+	accessToken, err := jwt.NewWithClaims(jwt.SigningMethodHS256, accessClaims).SignedString(s.jwtSecret)
+	if err != nil {
+		return nil, fmt.Errorf("sign access token: %w", err)
+	}
+
+	refreshExp := now.Add(time.Duration(s.refreshExpireDays) * 24 * time.Hour)
+	refreshClaims := tokenClaims{
+		TokenType: "refresh",
+		RegisteredClaims: jwt.RegisteredClaims{
+			Subject:   userID,
+			IssuedAt:  jwt.NewNumericDate(now),
+			ExpiresAt: jwt.NewNumericDate(refreshExp),
+		},
+	}
+	refreshToken, err := jwt.NewWithClaims(jwt.SigningMethodHS256, refreshClaims).SignedString(s.jwtSecret)
+	if err != nil {
+		return nil, fmt.Errorf("sign refresh token: %w", err)
+	}
+
+	return &signedTokens{
+		accessToken:  accessToken,
+		refreshToken: refreshToken,
+		refreshExp:   refreshExp,
+	}, nil
 }
 
 func (s *AuthService) GetMe(ctx context.Context, userID string) (*model.MeResponse, error) {
