@@ -2,7 +2,6 @@ package middleware
 
 import (
 	"errors"
-	"fmt"
 	"net/http"
 	"strings"
 	"time"
@@ -31,7 +30,7 @@ type AuthMiddleware struct {
 }
 
 type CustomClaims struct {
-	UserID uint `json:"user_id"`
+	UserID string `json:"user_id"`
 	jwt.RegisteredClaims
 }
 
@@ -51,14 +50,14 @@ func NewAuthMiddleware(cfg AuthConfig) *AuthMiddleware {
 	}
 }
 
-func (a *AuthMiddleware) GenerateToken(userID uint) (string, error) {
+func (a *AuthMiddleware) GenerateToken(userID string) (string, error) {
 	now := time.Now()
 
 	claims := CustomClaims{
 		UserID: userID,
 		RegisteredClaims: jwt.RegisteredClaims{
 			Issuer:    a.config.Issuer,
-			Subject:   fmt.Sprintf("%d", userID),
+			Subject:   userID,
 			IssuedAt:  jwt.NewNumericDate(now),
 			ExpiresAt: jwt.NewNumericDate(now.Add(time.Duration(a.config.TTLMinutes) * time.Minute)),
 		},
