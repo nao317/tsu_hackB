@@ -1,6 +1,7 @@
 package config
 
 import (
+    "fmt"
     "log"
     "os"
     "strconv"
@@ -37,7 +38,7 @@ func Load() *Config {
     return &Config{
         Port:                  getEnv("PORT", "8080"),
         Env:                   getEnv("ENV", "development"),
-        DatabaseURL:           mustGetEnv("DATABASE_URL"),
+        DatabaseURL:           resolveDatabaseURL(),
         SupabaseURL:           mustGetEnv("SUPABASE_URL"),
         SupabaseServiceKey:    mustGetEnv("SUPABASE_SERVICE_KEY"),
         SupabaseStorageBucket: getEnv("SUPABASE_STORAGE_BUCKET", "cards"),
@@ -49,6 +50,31 @@ func Load() *Config {
         SMTPPort:              getEnv("SMTP_PORT", "1025"),
         CORSAllowedOrigins:    getEnv("CORS_ALLOWED_ORIGINS", "http://localhost:3000"),
     }
+}
+
+func resolveDatabaseURL() string {
+    if dsn := os.Getenv("DATABASE_URL"); dsn != "" {
+        return dsn
+    }
+
+    dbUser := os.Getenv("DB_USER")
+    dbPass := os.Getenv("DB_PASS")
+    dbHost := os.Getenv("DB_HOST")
+    dbName := os.Getenv("DB_NAME")
+    dbPort := getEnv("DB_PORT", "3306")
+
+    if dbUser == "" || dbPass == "" || dbHost == "" || dbName == "" {
+        log.Fatal("環境変数 DATABASE_URL または DB_USER/DB_PASS/DB_HOST/DB_NAME が設定されていません")
+    }
+
+    return fmt.Sprintf(
+        "%s:%s@tcp(%s:%s)/%s?charset=utf8mb4&parseTime=true&loc=Local",
+        dbUser,
+        dbPass,
+        dbHost,
+        dbPort,
+        dbName,
+    )
 }
 
 func getEnv(key, defaultVal string) string {
