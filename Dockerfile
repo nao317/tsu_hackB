@@ -6,26 +6,21 @@ RUN apk add --no-cache git
 
 WORKDIR /app
 
-# 依存関係を先にコピーしてキャッシュを効かせる
+# 依存関係をコピー、キャッシュ
 COPY go.mod go.sum ./
 RUN go mod download
 
-# ソースコードをコピーしてビルド
+# ソースコードをコピー
 COPY . .
-RUN CGO_ENABLED=0 GOOS=linux go build -o main .
+# ビルド
+RUN CGO_ENABLED=0 GOOS=linux GORCH=amd64 go build -o /app/server .
 
-# --- Stage 2: Final stage ---
-FROM alpine:latest
+# 実行用のイメージ指定
+FROM gcr.io/distroless/base-debian12
 
-# 実行に必要な最小限のライブラリ（CA証明書など）をインストール
-RUN apk --no-cache add ca-certificates
+COPY --from=builder /app/server /server
 
-WORKDIR /root/
+# root権限での実行を拒否
+USER nonroot:nonroot
 
-# ビルドステージから実行バイナリのみをコピー
-COPY --from=builder /app/main .
-# もし config ファイルや静的ファイルがあればコピー
-# COPY --from=builder /app/config ./config
-
-# コンテナ起動時に実行
-CMD ["./main"]
+ENTRYPOINT ["/server"]
