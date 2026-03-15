@@ -18,7 +18,6 @@ func NewAuthHandler(svc *service.AuthService) *AuthHandler {
 	return &AuthHandler{svc: svc}
 }
 
-
 // サインアップ用の関数
 func (h *AuthHandler) Signup(c *gin.Context) {
 	var req model.SignupRequest
@@ -28,7 +27,7 @@ func (h *AuthHandler) Signup(c *gin.Context) {
 		return
 	}
 	resp, err := h.svc.Signup(c.Request.Context(), &req)
-	
+
 	// すでにアカウントが存在するときエラーを返す
 	if errors.Is(err, service.ErrEmailAlreadyExists) {
 		c.JSON(http.StatusConflict, gin.H{"error": err.Error(), "code": "EMAIL_ALREADY_EXISTS"})
@@ -46,7 +45,7 @@ func (h *AuthHandler) Signup(c *gin.Context) {
 // ログインするための関数
 func (h *AuthHandler) Login(c *gin.Context) {
 	var req model.LoginRequest
-	
+
 	// バリデーションエラー
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error(), "code": "VALIDATION_ERROR"})
@@ -105,8 +104,12 @@ func (h *AuthHandler) Me(c *gin.Context) {
 		return
 	}
 	me, err := h.svc.GetMe(c.Request.Context(), userID)
-	if err != nil {
+	if errors.Is(err, service.ErrUserNotFound) {
 		c.JSON(http.StatusNotFound, gin.H{"error": err.Error(), "code": "NOT_FOUND"})
+		return
+	}
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "サーバーエラー", "code": "INTERNAL_ERROR"})
 		return
 	}
 	c.JSON(http.StatusOK, me)
