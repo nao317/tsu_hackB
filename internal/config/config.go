@@ -3,6 +3,7 @@ package config
 import (
     "log"
     "os"
+    "strconv"
 
     "github.com/joho/godotenv"
 )
@@ -18,6 +19,10 @@ type Config struct {
     SupabaseStorageBucket string
 
     GeminiAPIKey string
+
+    JWTSecret            string
+    JWTAccessExpireMin   int
+    JWTRefreshExpireDays int
 
     SMTPHost string
     SMTPPort string
@@ -37,6 +42,9 @@ func Load() *Config {
         SupabaseServiceKey:    mustGetEnv("SUPABASE_SERVICE_KEY"),
         SupabaseStorageBucket: getEnv("SUPABASE_STORAGE_BUCKET", "cards"),
         GeminiAPIKey:          mustGetEnv("GEMINI_API_KEY"),
+        JWTSecret:             mustGetEnv("JWT_SECRET"),
+        JWTAccessExpireMin:    getEnvInt("JWT_ACCESS_EXPIRE_MIN", 60),
+        JWTRefreshExpireDays:  getEnvInt("JWT_REFRESH_EXPIRE_DAYS", 30),
         SMTPHost:              getEnv("SMTP_HOST", "localhost"),
         SMTPPort:              getEnv("SMTP_PORT", "1025"),
         CORSAllowedOrigins:    getEnv("CORS_ALLOWED_ORIGINS", "http://localhost:3000"),
@@ -54,6 +62,20 @@ func mustGetEnv(key string) string {
     v := os.Getenv(key)
     if v == "" {
         log.Fatalf("環境変数 %s が設定されていません", key)
+    }
+    return v
+}
+
+func getEnvInt(key string, defaultVal int) int {
+    raw := os.Getenv(key)
+    if raw == "" {
+        return defaultVal
+    }
+
+    v, err := strconv.Atoi(raw)
+    if err != nil {
+        log.Printf("環境変数 %s が不正です。デフォルト値 %d を使用します", key, defaultVal)
+        return defaultVal
     }
     return v
 }
